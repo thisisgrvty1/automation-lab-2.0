@@ -35,7 +35,7 @@ const AVATAR_COLORS = [
 ] as const;
 
 // Custom hooks
-const useLocalStorage = <T>(key: string, defaultValue: T) => {
+const useLocalStorage = <T,>(key: string, defaultValue: T) => {
   const [value, setValue] = useState<T>(() => {
     try {
       const item = localStorage.getItem(key);
