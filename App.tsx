@@ -25,7 +25,7 @@ interface Settings {
 
 const DEFAULT_SETTINGS: Settings = {
   makeApiKey: '',
-  defaultModel: 'gemini-2.5-flash'
+  defaultModel: 'gpt-4o'
 };
 
 const MODEL_OPTIONS = [
