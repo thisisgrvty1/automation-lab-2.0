@@ -84,6 +84,8 @@ const App: React.FC = () => {
   const [agents, setAgents] = useLocalStorage<Agent[]>(STORAGE_KEYS.AGENTS, []);
   const [settings, setSettings] = useLocalStorage(STORAGE_KEYS.SETTINGS, {
     makeApiKey: '',
+    openaiApiKey: '',
+    geminiApiKey: '',
     defaultModel: 'gemini-2.5-flash' as const,
     defaultTemperature: 0.7,
     defaultTopP: 0.9
@@ -1031,7 +1033,11 @@ const App: React.FC = () => {
 
   // Settings View
   const SettingsView: React.FC = () => {
-    const [showApiKey, setShowApiKey] = useState(false);
+    const [showApiKeys, setShowApiKeys] = useState({
+      make: false,
+      openai: false,
+      gemini: false
+    });
 
     const updateSettings = useCallback((updates: Partial<typeof settings>) => {
       setSettings(prev => ({ ...prev, ...updates }));
@@ -1049,10 +1055,56 @@ const App: React.FC = () => {
             <h3 className="text-lg font-semibold mb-4">API Configuration</h3>
             <div className="space-y-4">
               <div>
+                <label className="block text-sm font-medium mb-2">OpenAI API Key</label>
+                <div className="flex gap-2">
+                  <Input
+                    type={showApiKeys.openai ? 'text' : 'password'}
+                    value={settings.openaiApiKey}
+                    onChange={(e) => updateSettings({ openaiApiKey: e.target.value })}
+                    placeholder="sk-..."
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setShowApiKeys(prev => ({ ...prev, openai: !prev.openai }))}
+                  >
+                    {showApiKeys.openai ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Required for GPT models (GPT-4o, GPT-4o Mini, GPT-3.5 Turbo)
+                </p>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-2">Gemini API Key</label>
+                <div className="flex gap-2">
+                  <Input
+                    type={showApiKeys.gemini ? 'text' : 'password'}
+                    value={settings.geminiApiKey}
+                    onChange={(e) => updateSettings({ geminiApiKey: e.target.value })}
+                    placeholder="AIza..."
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setShowApiKeys(prev => ({ ...prev, gemini: !prev.gemini }))}
+                  >
+                    {showApiKeys.gemini ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Required for Gemini models and image generation
+                </p>
+              </div>
+              
+              <div>
                 <label className="block text-sm font-medium mb-2">Make.com API Key</label>
                 <div className="flex gap-2">
                   <Input
-                    type={showApiKey ? 'text' : 'password'}
+                    type={showApiKeys.make ? 'text' : 'password'}
                     value={settings.makeApiKey}
                     onChange={(e) => updateSettings({ makeApiKey: e.target.value })}
                     placeholder="Enter your Make.com API key"
@@ -1061,9 +1113,9 @@ const App: React.FC = () => {
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => setShowApiKey(!showApiKey)}
+                    onClick={() => setShowApiKeys(prev => ({ ...prev, make: !prev.make }))}
                   >
-                    {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {showApiKeys.make ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </Button>
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">

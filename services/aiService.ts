@@ -2,43 +2,55 @@ import { GoogleGenAI } from "@google/genai";
 import OpenAI from 'openai';
 import type { Conversation } from '../types';
 
-// Initialize Gemini
-const geminiApiKey = process.env.GEMINI_API_KEY;
-let geminiAI: GoogleGenAI | null = null;
-if (geminiApiKey) {
-    geminiAI = new GoogleGenAI({ apiKey: geminiApiKey });
-}
+// Get API keys from settings
+const getApiKeys = () => {
+    try {
+        const settings = JSON.parse(localStorage.getItem('settings') || '{}');
+        return {
+            gemini: settings.geminiApiKey || process.env.GEMINI_API_KEY,
+            openai: settings.openaiApiKey || process.env.OPENAI_API_KEY
+        };
+    } catch {
+        return {
+            gemini: process.env.GEMINI_API_KEY,
+            openai: process.env.OPENAI_API_KEY
+        };
+    }
+};
 
-// Initialize OpenAI
-const openaiApiKey = process.env.OPENAI_API_KEY;
-let openaiClient: OpenAI | null = null;
-if (openaiApiKey) {
-    openaiClient = new OpenAI({
-        apiKey: openaiApiKey,
+// Initialize clients dynamically
+const getGeminiClient = () => {
+    const apiKey = getApiKeys().gemini;
+    if (!apiKey) return null;
+    return new GoogleGenAI({ apiKey });
+};
+
+const getOpenAIClient = () => {
+    const apiKey = getApiKeys().openai;
+    if (!apiKey) return null;
+    return new OpenAI({
+        apiKey,
         dangerouslyAllowBrowser: true
     });
-}
+};
 
 export const streamChat = async (conversation: Conversation) => {
     const { model } = conversation;
     if (model.startsWith('gpt-')) {
         return streamOpenAIChat(conversation);
     } else {
-        if (!geminiAI) {
+        const geminiClient = getGeminiClient();
+        if (!geminiClient) {
             throw new Error("Gemini API key is not configured. Please use an OpenAI model instead or configure your Gemini API key.");
         }
-        return streamGeminiChat(conversation);
+        return streamGeminiChat(conversation, geminiClient);
     }
 };
 
-const streamGeminiChat = async (conversation: Conversation) => {
-    if (!geminiAI) {
-        throw new Error("Gemini API key is not configured. Please set GEMINI_API_KEY in your environment variables.");
-    }
-
+const streamGeminiChat = async (conversation: Conversation, geminiClient: GoogleGenAI) => {
     const { systemPrompt, temperature, topP, messages } = conversation;
 
-    const chat = geminiAI.chats.create({
+    const chat = geminiClient.chats.create({
         model: conversation.model,
         config: {
             systemInstruction: systemPrompt,
@@ -65,6 +77,7 @@ const streamGeminiChat = async (conversation: Conversation) => {
 };
 
 const streamOpenAIChat = async (conversation: Conversation) => {
+    const openaiClient = getOpenAIClient();
     if (!openaiClient) {
         throw new Error("OpenAI API key is not configured. Please set OPENAI_API_KEY in your environment variables.");
     }
@@ -105,12 +118,13 @@ const streamOpenAIChat = async (conversation: Conversation) => {
 };
 
 export const generateImages = async (prompt: string) => {
-    if (!geminiAI) {
+    const geminiClient = getGeminiClient();
+    if (!geminiClient) {
         throw new Error("Gemini API key is not configured for image generation.");
     }
 
     try {
-        const response = await geminiAI.models.generateImages({
+        const response = await geminiClient.models.generateImages({
             model: 'imagen-3.0-generate-002',
             prompt: prompt,
             config: {
@@ -130,6 +144,7 @@ export const generateImages = async (prompt: string) => {
 export const getTitleForChat = async (firstMessage: string, model: string = 'gemini-2.5-flash') => {
     try {
         if (model.startsWith('gpt-')) {
+            const openaiClient = getOpenAIClient();
             if (!openaiClient) {
                 throw new Error("OpenAI API key is not configured.");
             }
@@ -146,8 +161,10 @@ export const getTitleForChat = async (firstMessage: string, model: string = 'gem
             });
             return response.choices[0]?.message?.content?.replace(/"/g, '').trim() || "New Chat";
         } else {
-            if (!geminiAI) {
+            const geminiClient = getGeminiClient();
+            if (!geminiClient) {
                 // Fallback to OpenAI if Gemini is not available
+                const openaiClient = getOpenAIClient();
                 if (openaiClient) {
                     const response = await openaiClient.chat.completions.create({
                         model: 'gpt-3.5-turbo',
@@ -164,7 +181,7 @@ export const getTitleForChat = async (firstMessage: string, model: string = 'gem
                 }
                 return "New Chat";
             }
-            const response = await geminiAI.models.generateContent({
+            const response = await geminiClient.models.generateContent({
                 model: model,
                 contents: `Summarize the following user query into a short, 3-5 word title for a chat log. Do not use quotes. Query: "${firstMessage}"`,
                 config: {
