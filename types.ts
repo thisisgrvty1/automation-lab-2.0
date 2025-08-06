@@ -13,6 +13,7 @@ export interface Conversation {
   systemPrompt: string;
   temperature: number;
   topP: number;
+  model: 'gemini-2.5-flash' | 'gpt-4o' | 'gpt-4o-mini' | 'gpt-3.5-turbo';
   createdAt: number;
 }
 

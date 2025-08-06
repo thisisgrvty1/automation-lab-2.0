@@ -1,0 +1,208 @@
+import { GoogleGenAI } from "@google/genai";
+import OpenAI from 'openai';
+import type { Conversation } from '../types';
+
+// Initialize Gemini
+const geminiApiKey = process.env.GEMINI_API_KEY;
+let geminiAI: GoogleGenAI | null = null;
+if (geminiApiKey) {
+    geminiAI = new GoogleGenAI({ apiKey: geminiApiKey });
+}
+
+// Initialize OpenAI
+const openaiApiKey = process.env.OPENAI_API_KEY;
+let openaiClient: OpenAI | null = null;
+if (openaiApiKey) {
+    openaiClient = new OpenAI({
+        apiKey: openaiApiKey,
+        dangerouslyAllowBrowser: true
+    });
+}
+
+export const streamChat = async (conversation: Conversation) => {
+    const { systemPrompt, temperature, topP, messages, model } = conversation;
+
+    if (model.startsWith('gpt-')) {
+        return streamOpenAIChat(conversation);
+    } else {
+        return streamGeminiChat(conversation);
+    }
+};
+
+const streamGeminiChat = async (conversation: Conversation) => {
+    if (!geminiAI) {
+        throw new Error("Gemini API key is not configured. Please set GEMINI_API_KEY in your environment variables.");
+    }
+
+    const { systemPrompt, temperature, topP, messages } = conversation;
+
+    const chat = geminiAI.chats.create({
+        model: 'gemini-2.5-flash',
+        config: {
+            systemInstruction: systemPrompt,
+            temperature: temperature,
+            topP: topP,
+        },
+        history: messages.slice(0, -1)
+            .filter(m => m.role === 'user' || m.role === 'model')
+            .map(m => ({
+                role: m.role,
+                parts: [{ text: m.content }]
+            }))
+    });
+
+    const lastMessage = messages[messages.length - 1];
+    
+    try {
+        const result = await chat.sendMessageStream({ message: lastMessage.content });
+        return result;
+    } catch (error) {
+        console.error("Error in streamGeminiChat:", error);
+        throw new Error("Failed to get response from Gemini model.");
+    }
+};
+
+const streamOpenAIChat = async (conversation: Conversation) => {
+    if (!openaiClient) {
+        throw new Error("OpenAI API key is not configured. Please set OPENAI_API_KEY in your environment variables.");
+    }
+
+    const { systemPrompt, temperature, topP, messages, model } = conversation;
+
+    const openaiMessages = [
+        { role: 'system' as const, content: systemPrompt },
+        ...messages.map(m => ({
+            role: m.role === 'model' ? 'assistant' as const : m.role as 'user' | 'system',
+            content: m.content
+        }))
+    ];
+
+    try {
+        const stream = await openaiClient.chat.completions.create({
+            model: model,
+            messages: openaiMessages,
+            temperature: temperature,
+            top_p: topP,
+            stream: true,
+        });
+
+        return {
+            async *[Symbol.asyncIterator]() {
+                for await (const chunk of stream) {
+                    const content = chunk.choices[0]?.delta?.content;
+                    if (content) {
+                        yield { text: content };
+                    }
+                }
+            }
+        };
+    } catch (error) {
+        console.error("Error in streamOpenAIChat:", error);
+        throw new Error("Failed to get response from OpenAI model.");
+    }
+};
+
+export const generateImages = async (prompt: string) => {
+    if (!geminiAI) {
+        throw new Error("Gemini API key is not configured for image generation.");
+    }
+
+    try {
+        const response = await geminiAI.models.generateImages({
+            model: 'imagen-3.0-generate-002',
+            prompt: prompt,
+            config: {
+                numberOfImages: 4,
+                outputMimeType: 'image/jpeg',
+                aspectRatio: '1:1',
+            },
+        });
+        
+        return response.generatedImages.map(img => img.image.imageBytes);
+    } catch (error) {
+        console.error("Error in generateImages:", error);
+        throw new Error("Failed to generate images.");
+    }
+};
+
+export const getTitleForChat = async (firstMessage: string, model: string = 'gemini-2.5-flash') => {
+    try {
+        if (model.startsWith('gpt-') && openaiClient) {
+            const response = await openaiClient.chat.completions.create({
+                model: 'gpt-3.5-turbo',
+                messages: [
+                    {
+                        role: 'user',
+                        content: `Summarize the following user query into a short, 3-5 word title for a chat log. Do not use quotes. Query: "${firstMessage}"`
+                    }
+                ],
+                temperature: 0.1,
+                max_tokens: 20
+            });
+            return response.choices[0]?.message?.content?.replace(/"/g, '').trim() || "New Chat";
+        } else if (geminiAI) {
+            const response = await geminiAI.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: `Summarize the following user query into a short, 3-5 word title for a chat log. Do not use quotes. Query: "${firstMessage}"`,
+                config: {
+                    temperature: 0.1,
+                }
+            });
+            return response.text.replace(/"/g, '').trim();
+        }
+        return "New Chat";
+    } catch (error) {
+        console.error("Error generating title:", error);
+        return "New Chat";
+    }
+};
+
+export const postToWebhook = async (url: string, message: string, apiKey: string) => {
+    if (!apiKey) {
+        throw new Error("Make.com API key is not configured. Please set it in Settings.");
+    }
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-make-apikey': apiKey
+            },
+            body: JSON.stringify({ text: message }),
+        });
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error("Authentication failed (401). Please check that your Make.com API key in Settings is correct and valid for the webhook URL.");
+            }
+            const statusText = response.statusText || 'An error occurred';
+            throw new Error(`Webhook request failed: ${response.status} ${statusText}`);
+        }
+
+        const responseText = await response.text();
+
+        if (!responseText) {
+            return "Workflow executed successfully (no content returned).";
+        }
+        
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            try {
+                const jsonResponse = JSON.parse(responseText);
+                return jsonResponse.text || JSON.stringify(jsonResponse, null, 2);
+            } catch (error) {
+                return responseText;
+            }
+        }
+        
+        return responseText;
+
+    } catch (error) {
+        console.error("Error posting to webhook:", error);
+        if (error instanceof Error) {
+            throw error;
+        }
+        throw new Error("An unknown error occurred while contacting the workflow.");
+    }
+};
