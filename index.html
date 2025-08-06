@@ -1,0 +1,75 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Model Automation Lab 2.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+            colors: {
+              gray: {
+                50: '#f9fafb',
+                100: '#f3f4f6',
+                200: '#e5e7eb',
+                300: '#d1d5db',
+                400: '#9ca3af',
+                500: '#6b7280',
+                600: '#4b5563',
+                700: '#374151',
+                800: '#1f2937',
+                900: '#111827',
+                950: '#030712',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+      }
+      .dark ::-webkit-scrollbar {
+        width: 8px;
+      }
+      .dark ::-webkit-scrollbar-track {
+        background: #111827;
+      }
+      .dark ::-webkit-scrollbar-thumb {
+        background: #374151;
+        border-radius: 4px;
+      }
+      .dark ::-webkit-scrollbar-thumb:hover {
+        background: #4b5563;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.1/",
+    "react/": "https://esm.sh/react@^19.1.1/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.12.0",
+    "react-router-dom": "https://esm.sh/react-router-dom@^7.7.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-white dark:bg-black text-black dark:text-white">
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

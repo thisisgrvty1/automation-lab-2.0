@@ -1,0 +1,5 @@
+{
+  "name": "Model Automation Lab 2.0",
+  "description": "A modular, production-ready dashboard application for interacting with various AI models for chat, image generation, workflows, and agent management. Built with React and Tailwind CSS.",
+  "requestFramePermissions": []
+}
