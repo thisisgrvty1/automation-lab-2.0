@@ -1,460 +1,196 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { Button, Card, Input, Textarea, Slider, Modal, Dialog, Select } from './components/ui';
+import { Button, Card, Input, Textarea, Slider, Modal, Dialog, Select, Checkbox } from './components/ui';
 import { 
-  Bot, Send, User, Sun, Moon, Home, MessageSquare, Zap, Image as ImageIcon, 
-  HelpCircle, SlidersHorizontal, Settings, ArrowLeft, Download, RefreshCw, 
-  Loader, Edit, Trash2, Plus, X, CheckSquare, Square, Eye, EyeOff 
+  Bot, Send, User, Sun, Moon, Home, MessageSquare, Zap, Image, 
+  HelpCircle, SlidersHorizontal, Settings, ArrowLeft, Download, 
+  RefreshCw, Loader, Edit, Trash2, Plus, X, CheckSquare, Square,
+  Eye, EyeOff
 } from './components/icons';
 import { streamChat, generateImages, getTitleForChat, postToWebhook } from './services/aiService';
 import type { Conversation, Message, ImageObject, Workflow, Agent } from './types';
 
+// Constants
 const STORAGE_KEYS = {
-  conversations: 'mal2_conversations',
-  images: 'mal2_images',
-  workflows: 'mal2_workflows',
-  agents: 'mal2_agents',
-  settings: 'mal2_settings',
-  theme: 'mal2_theme'
-};
+  CONVERSATIONS: 'conversations',
+  IMAGES: 'images',
+  WORKFLOWS: 'workflows',
+  AGENTS: 'agents',
+  SETTINGS: 'settings',
+  THEME: 'theme'
+} as const;
 
-interface Settings {
-  makeApiKey: string;
-  defaultModel: 'gemini-2.5-flash' | 'gpt-4o' | 'gpt-4o-mini' | 'gpt-3.5-turbo';
-}
+const DEFAULT_SYSTEM_PROMPT = "You are a helpful AI assistant. Be concise and accurate in your responses.";
 
-const DEFAULT_SETTINGS: Settings = {
-  makeApiKey: '',
-  defaultModel: 'gpt-4o'
-};
-
-const MODEL_OPTIONS = [
+const MODELS = [
   { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   { value: 'gpt-4o', label: 'GPT-4o' },
   { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
   { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' }
-];
+] as const;
 
-function App() {
-  const [isDark, setIsDark] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.theme);
-    return saved ? JSON.parse(saved) : false;
-  });
+const AVATAR_COLORS = [
+  '#3B82F6', '#EF4444', '#10B981', '#F59E0B', 
+  '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'
+] as const;
 
-  const [conversations, setConversations] = useState<Conversation[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.conversations);
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [images, setImages] = useState<ImageObject[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.images);
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [workflows, setWorkflows] = useState<Workflow[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.workflows);
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [agents, setAgents] = useState<Agent[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.agents);
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [settings, setSettings] = useState<Settings>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.settings);
-    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-  });
-
-  const [currentView, setCurrentView] = useState<'home' | 'chat' | 'images' | 'workflows' | 'agents' | 'help' | 'settings'>('home');
-  const [activeConversation, setActiveConversation] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState<{ type: string; id: string } | null>(null);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', isDark);
-    localStorage.setItem(STORAGE_KEYS.theme, JSON.stringify(isDark));
-  }, [isDark]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.conversations, JSON.stringify(conversations));
-  }, [conversations]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.images, JSON.stringify(images));
-  }, [images]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.workflows, JSON.stringify(workflows));
-  }, [workflows]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.agents, JSON.stringify(agents));
-  }, [agents]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
-  }, [settings]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversations, activeConversation]);
-
-  const createNewConversation = (model?: string) => {
-    const newConversation: Conversation = {
-      id: Date.now().toString(),
-      title: 'New Chat',
-      messages: [],
-      systemPrompt: 'You are a helpful AI assistant.',
-      temperature: 0.7,
-      topP: 0.9,
-      model: (model as any) || settings.defaultModel,
-      createdAt: Date.now()
-    };
-    setConversations(prev => [newConversation, ...prev]);
-    setActiveConversation(newConversation.id);
-    setCurrentView('chat');
-  };
-
-  const sendMessage = async (content: string, conversationId: string) => {
-    const conversation = conversations.find(c => c.id === conversationId);
-    if (!conversation) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content
-    };
-
-    const updatedConversation = {
-      ...conversation,
-      messages: [...conversation.messages, userMessage]
-    };
-
-    if (conversation.messages.length === 0) {
-      const title = await getTitleForChat(content, conversation.model);
-      updatedConversation.title = title;
-    }
-
-    setConversations(prev => prev.map(c => c.id === conversationId ? updatedConversation : c));
-    setIsGenerating(true);
-
+// Custom hooks
+const useLocalStorage = <T>(key: string, defaultValue: T) => {
+  const [value, setValue] = useState<T>(() => {
     try {
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        content: '',
-        isThinking: true
-      };
+      const item = localStorage.getItem(key);
+      return item ? JSON.parse(item) : defaultValue;
+    } catch {
+      return defaultValue;
+    }
+  });
 
-      setConversations(prev => prev.map(c => 
-        c.id === conversationId 
-          ? { ...c, messages: [...c.messages, assistantMessage] }
-          : c
-      ));
-
-      const stream = await streamChat(updatedConversation);
-      let fullResponse = '';
-
-      for await (const chunk of stream) {
-        fullResponse += chunk.text;
-        setConversations(prev => prev.map(c => 
-          c.id === conversationId 
-            ? {
-                ...c,
-                messages: c.messages.map(m => 
-                  m.id === assistantMessage.id 
-                    ? { ...m, content: fullResponse, isThinking: false }
-                    : m
-                )
-              }
-            : c
-        ));
+  const setStoredValue = useCallback((newValue: T | ((prev: T) => T)) => {
+    setValue(prev => {
+      const valueToStore = typeof newValue === 'function' ? (newValue as (prev: T) => T)(prev) : newValue;
+      try {
+        localStorage.setItem(key, JSON.stringify(valueToStore));
+      } catch (error) {
+        console.error(`Error saving to localStorage:`, error);
       }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        content: `Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`
-      };
+      return valueToStore;
+    });
+  }, [key]);
 
-      setConversations(prev => prev.map(c => 
-        c.id === conversationId 
-          ? { ...c, messages: [...c.messages, errorMessage] }
-          : c
-      ));
-    } finally {
-      setIsGenerating(false);
-    }
-  };
+  return [value, setStoredValue] as const;
+};
 
-  const generateImage = async (prompt: string) => {
-    const imageObj: ImageObject = {
-      id: Date.now().toString(),
-      prompt,
-      base64: '',
-      status: 'generating',
-      createdAt: Date.now()
-    };
+const useTheme = () => {
+  const [theme, setTheme] = useLocalStorage(STORAGE_KEYS.THEME, 'dark');
 
-    setImages(prev => [imageObj, ...prev]);
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
 
-    try {
-      const imageBytes = await generateImages(prompt);
-      const base64Images = imageBytes.map(bytes => `data:image/jpeg;base64,${bytes}`);
-      
-      const updatedImages = base64Images.map((base64, index) => ({
-        ...imageObj,
-        id: `${imageObj.id}_${index}`,
-        base64,
-        status: 'ready' as const
-      }));
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  }, [setTheme]);
 
-      setImages(prev => [
-        ...updatedImages,
-        ...prev.filter(img => img.id !== imageObj.id)
-      ]);
-    } catch (error) {
-      console.error('Error generating image:', error);
-      setImages(prev => prev.map(img => 
-        img.id === imageObj.id 
-          ? { ...img, status: 'error' }
-          : img
-      ));
-    }
-  };
+  return { theme, toggleTheme };
+};
 
-  const executeWorkflow = async (workflowId: string, message: string) => {
-    const workflow = workflows.find(w => w.id === workflowId);
-    if (!workflow) return;
+// Main App Component
+const App: React.FC = () => {
+  const { theme, toggleTheme } = useTheme();
+  const [currentView, setCurrentView] = useState<'home' | 'chat' | 'images' | 'workflows' | 'agents' | 'settings'>('home');
+  const [conversations, setConversations] = useLocalStorage<Conversation[]>(STORAGE_KEYS.CONVERSATIONS, []);
+  const [images, setImages] = useLocalStorage<ImageObject[]>(STORAGE_KEYS.IMAGES, []);
+  const [workflows, setWorkflows] = useLocalStorage<Workflow[]>(STORAGE_KEYS.WORKFLOWS, []);
+  const [agents, setAgents] = useLocalStorage<Agent[]>(STORAGE_KEYS.AGENTS, []);
+  const [settings, setSettings] = useLocalStorage(STORAGE_KEYS.SETTINGS, {
+    makeApiKey: '',
+    defaultModel: 'gemini-2.5-flash' as const,
+    defaultTemperature: 0.7,
+    defaultTopP: 0.9
+  });
 
-    const conversation = conversations.find(c => c.id === activeConversation);
-    if (!conversation) return;
+  // Navigation
+  const NavigationButton: React.FC<{
+    icon: React.ComponentType<any>;
+    label: string;
+    view: typeof currentView;
+    isActive: boolean;
+  }> = ({ icon: Icon, label, view, isActive }) => (
+    <Button
+      variant={isActive ? "primary" : "ghost"}
+      className="w-full justify-start gap-3 h-12"
+      onClick={() => setCurrentView(view)}
+    >
+      <Icon className="w-5 h-5" />
+      {label}
+    </Button>
+  );
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: message
-    };
-
-    setConversations(prev => prev.map(c => 
-      c.id === activeConversation 
-        ? { ...c, messages: [...c.messages, userMessage] }
-        : c
-    ));
-
-    setIsGenerating(true);
-
-    try {
-      const response = await postToWebhook(workflow.webhookUrl, message, settings.makeApiKey);
-      
-      const workflowMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'workflow',
-        content: response
-      };
-
-      setConversations(prev => prev.map(c => 
-        c.id === activeConversation 
-          ? { ...c, messages: [...c.messages, workflowMessage] }
-          : c
-      ));
-    } catch (error) {
-      console.error('Error executing workflow:', error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'workflow',
-        content: `Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`
-      };
-
-      setConversations(prev => prev.map(c => 
-        c.id === activeConversation 
-          ? { ...c, messages: [...c.messages, errorMessage] }
-          : c
-      ));
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  const deleteItem = (type: string, id: string) => {
-    switch (type) {
-      case 'conversation':
-        setConversations(prev => prev.filter(c => c.id !== id));
-        if (activeConversation === id) {
-          setActiveConversation(null);
-          setCurrentView('home');
-        }
-        break;
-      case 'image':
-        setImages(prev => prev.filter(img => img.id !== id));
-        break;
-      case 'workflow':
-        setWorkflows(prev => prev.filter(w => w.id !== id));
-        break;
-      case 'agent':
-        setAgents(prev => prev.filter(a => a.id !== id));
-        break;
-    }
-    setShowDeleteDialog(null);
-  };
-
-  const Sidebar = () => (
+  const Sidebar: React.FC = () => (
     <div className="w-64 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col">
       <div className="p-4 border-b border-gray-200 dark:border-gray-800">
-        <h1 className="text-xl font-bold">Model Automation Lab 2.0</h1>
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+            <Bot className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="font-bold text-lg">Model Lab 2.0</h1>
+            <p className="text-xs text-gray-500 dark:text-gray-400">AI Automation Platform</p>
+          </div>
+        </div>
       </div>
       
       <nav className="flex-1 p-4 space-y-2">
-        <Button
-          variant={currentView === 'home' ? 'primary' : 'ghost'}
-          className="w-full justify-start"
-          onClick={() => setCurrentView('home')}
-        >
-          <Home className="w-4 h-4 mr-2" />
-          Home
-        </Button>
-        
-        <Button
-          variant={currentView === 'chat' ? 'primary' : 'ghost'}
-          className="w-full justify-start"
-          onClick={() => setCurrentView('chat')}
-        >
-          <MessageSquare className="w-4 h-4 mr-2" />
-          Chat
-        </Button>
-        
-        <Button
-          variant={currentView === 'images' ? 'primary' : 'ghost'}
-          className="w-full justify-start"
-          onClick={() => setCurrentView('images')}
-        >
-          <ImageIcon className="w-4 h-4 mr-2" />
-          Images
-        </Button>
-        
-        <Button
-          variant={currentView === 'workflows' ? 'primary' : 'ghost'}
-          className="w-full justify-start"
-          onClick={() => setCurrentView('workflows')}
-        >
-          <Zap className="w-4 h-4 mr-2" />
-          Workflows
-        </Button>
-        
-        <Button
-          variant={currentView === 'agents' ? 'primary' : 'ghost'}
-          className="w-full justify-start"
-          onClick={() => setCurrentView('agents')}
-        >
-          <Bot className="w-4 h-4 mr-2" />
-          Agents
-        </Button>
-        
-        <Button
-          variant={currentView === 'help' ? 'primary' : 'ghost'}
-          className="w-full justify-start"
-          onClick={() => setCurrentView('help')}
-        >
-          <HelpCircle className="w-4 h-4 mr-2" />
-          Help
-        </Button>
+        <NavigationButton icon={Home} label="Dashboard" view="home" isActive={currentView === 'home'} />
+        <NavigationButton icon={MessageSquare} label="Chat" view="chat" isActive={currentView === 'chat'} />
+        <NavigationButton icon={Image} label="Images" view="images" isActive={currentView === 'images'} />
+        <NavigationButton icon={Zap} label="Workflows" view="workflows" isActive={currentView === 'workflows'} />
+        <NavigationButton icon={Bot} label="Agents" view="agents" isActive={currentView === 'agents'} />
       </nav>
       
       <div className="p-4 border-t border-gray-200 dark:border-gray-800 space-y-2">
-        <Button
-          variant="ghost"
-          className="w-full justify-start"
-          onClick={() => setShowSettingsModal(true)}
-        >
-          <Settings className="w-4 h-4 mr-2" />
+        <Button variant="ghost" className="w-full justify-start gap-3 h-12" onClick={() => setCurrentView('settings')}>
+          <Settings className="w-5 h-5" />
           Settings
         </Button>
-        
-        <Button
-          variant="ghost"
-          className="w-full justify-start"
-          onClick={() => setIsDark(!isDark)}
-        >
-          {isDark ? <Sun className="w-4 h-4 mr-2" /> : <Moon className="w-4 h-4 mr-2" />}
-          {isDark ? 'Light' : 'Dark'} Mode
+        <Button variant="ghost" className="w-full justify-start gap-3 h-12" onClick={toggleTheme}>
+          {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         </Button>
       </div>
     </div>
   );
 
-  const HomeView = () => (
-    <div className="flex-1 p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold mb-4">Welcome to Model Automation Lab 2.0</h1>
-          <p className="text-xl text-gray-600 dark:text-gray-400">
-            Your comprehensive AI workspace for chat, image generation, workflows, and agent management
-          </p>
+  // Dashboard View
+  const DashboardView: React.FC = () => {
+    const stats = useMemo(() => ({
+      totalChats: conversations.length,
+      totalImages: images.length,
+      totalWorkflows: workflows.length,
+      totalAgents: agents.length
+    }), [conversations.length, images.length, workflows.length, agents.length]);
+
+    const StatCard: React.FC<{ title: string; value: number; icon: React.ComponentType<any> }> = ({ title, value, icon: Icon }) => (
+      <Card className="p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{title}</p>
+            <p className="text-2xl font-bold">{value}</p>
+          </div>
+          <Icon className="w-8 h-8 text-gray-400" />
+        </div>
+      </Card>
+    );
+
+    return (
+      <div className="p-8">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold mb-2">Dashboard</h1>
+          <p className="text-gray-600 dark:text-gray-400">Welcome to your AI automation platform</p>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <StatCard title="Total Chats" value={stats.totalChats} icon={MessageSquare} />
+          <StatCard title="Generated Images" value={stats.totalImages} icon={Image} />
+          <StatCard title="Active Workflows" value={stats.totalWorkflows} icon={Zap} />
+          <StatCard title="AI Agents" value={stats.totalAgents} icon={Bot} />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setCurrentView('chat')}>
-            <MessageSquare className="w-8 h-8 mb-4 text-blue-500" />
-            <h3 className="text-lg font-semibold mb-2">Chat</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Engage with AI models including Gemini and GPT
-            </p>
-          </Card>
-
-          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setCurrentView('images')}>
-            <ImageIcon className="w-8 h-8 mb-4 text-green-500" />
-            <h3 className="text-lg font-semibold mb-2">Images</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Generate stunning images with AI
-            </p>
-          </Card>
-
-          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setCurrentView('workflows')}>
-            <Zap className="w-8 h-8 mb-4 text-yellow-500" />
-            <h3 className="text-lg font-semibold mb-2">Workflows</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Automate tasks with Make.com integration
-            </p>
-          </Card>
-
-          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setCurrentView('agents')}>
-            <Bot className="w-8 h-8 mb-4 text-purple-500" />
-            <h3 className="text-lg font-semibold mb-2">Agents</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Create and manage AI agents
-            </p>
-          </Card>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card className="p-6">
-            <h3 className="text-lg font-semibold mb-4">Quick Start</h3>
+            <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
             <div className="space-y-3">
-              <Button 
-                className="w-full justify-start" 
-                onClick={() => createNewConversation('gemini-2.5-flash')}
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                New Gemini Chat
+              <Button className="w-full justify-start gap-3" onClick={() => setCurrentView('chat')}>
+                <MessageSquare className="w-4 h-4" />
+                Start New Chat
               </Button>
-              <Button 
-                className="w-full justify-start" 
-                onClick={() => createNewConversation('gpt-4o')}
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                New GPT-4o Chat
-              </Button>
-              <Button 
-                className="w-full justify-start" 
-                onClick={() => setCurrentView('images')}
-              >
-                <ImageIcon className="w-4 h-4 mr-2" />
+              <Button className="w-full justify-start gap-3" onClick={() => setCurrentView('images')}>
+                <Image className="w-4 h-4" />
                 Generate Images
+              </Button>
+              <Button className="w-full justify-start gap-3" onClick={() => setCurrentView('workflows')}>
+                <Zap className="w-4 h-4" />
+                Create Workflow
               </Button>
             </div>
           </Card>
@@ -463,894 +199,988 @@ function App() {
             <h3 className="text-lg font-semibold mb-4">Recent Activity</h3>
             <div className="space-y-3">
               {conversations.slice(0, 3).map(conv => (
-                <div 
-                  key={conv.id}
-                  className="flex items-center justify-between p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer"
-                  onClick={() => {
-                    setActiveConversation(conv.id);
-                    setCurrentView('chat');
-                  }}
-                >
-                  <div className="flex items-center">
-                    <MessageSquare className="w-4 h-4 mr-2 text-gray-400" />
-                    <span className="text-sm truncate">{conv.title}</span>
+                <div key={conv.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+                  <MessageSquare className="w-4 h-4 text-gray-400" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{conv.title}</p>
+                    <p className="text-xs text-gray-500">{new Date(conv.createdAt).toLocaleDateString()}</p>
                   </div>
-                  <span className="text-xs text-gray-400">
-                    {MODEL_OPTIONS.find(m => m.value === conv.model)?.label || conv.model}
-                  </span>
                 </div>
               ))}
               {conversations.length === 0 && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">No recent conversations</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">No recent activity</p>
               )}
             </div>
           </Card>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  const ChatView = () => {
+  // Chat View
+  const ChatView: React.FC = () => {
+    const [activeConversation, setActiveConversation] = useState<string | null>(null);
     const [input, setInput] = useState('');
-    const [showConversationSettings, setShowConversationSettings] = useState(false);
-    const conversation = activeConversation ? conversations.find(c => c.id === activeConversation) : null;
+    const [isLoading, setIsLoading] = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
 
-    const handleSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!input.trim() || !activeConversation) return;
-      sendMessage(input.trim(), activeConversation);
+    const currentConversation = useMemo(() => 
+      conversations.find(c => c.id === activeConversation), 
+      [conversations, activeConversation]
+    );
+
+    const createNewConversation = useCallback(() => {
+      const newConv: Conversation = {
+        id: Date.now().toString(),
+        title: 'New Chat',
+        messages: [],
+        systemPrompt: DEFAULT_SYSTEM_PROMPT,
+        temperature: settings.defaultTemperature,
+        topP: settings.defaultTopP,
+        model: settings.defaultModel,
+        createdAt: Date.now()
+      };
+      setConversations(prev => [newConv, ...prev]);
+      setActiveConversation(newConv.id);
+    }, [setConversations, settings]);
+
+    const sendMessage = useCallback(async () => {
+      if (!input.trim() || !currentConversation || isLoading) return;
+
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: input.trim()
+      };
+
+      const updatedConversation = {
+        ...currentConversation,
+        messages: [...currentConversation.messages, userMessage]
+      };
+
+      setConversations(prev => prev.map(c => c.id === activeConversation ? updatedConversation : c));
       setInput('');
-    };
+      setIsLoading(true);
 
-    const updateConversationSettings = (updates: Partial<Conversation>) => {
+      try {
+        // Generate title for first message
+        if (currentConversation.messages.length === 0) {
+          const title = await getTitleForChat(input.trim(), currentConversation.model);
+          setConversations(prev => prev.map(c => 
+            c.id === activeConversation ? { ...c, title } : c
+          ));
+        }
+
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'model',
+          content: ''
+        };
+
+        setConversations(prev => prev.map(c => 
+          c.id === activeConversation 
+            ? { ...c, messages: [...c.messages, assistantMessage] }
+            : c
+        ));
+
+        const stream = await streamChat(updatedConversation);
+        
+        for await (const chunk of stream) {
+          if (chunk.text) {
+            setConversations(prev => prev.map(c => 
+              c.id === activeConversation 
+                ? {
+                    ...c,
+                    messages: c.messages.map(m => 
+                      m.id === assistantMessage.id 
+                        ? { ...m, content: m.content + chunk.text }
+                        : m
+                    )
+                  }
+                : c
+            ));
+          }
+        }
+      } catch (error) {
+        console.error('Error sending message:', error);
+        const errorMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'model',
+          content: `Error: ${error instanceof Error ? error.message : 'An unknown error occurred'}`
+        };
+        
+        setConversations(prev => prev.map(c => 
+          c.id === activeConversation 
+            ? { ...c, messages: [...c.messages, errorMessage] }
+            : c
+        ));
+      } finally {
+        setIsLoading(false);
+      }
+    }, [input, currentConversation, isLoading, activeConversation, setConversations]);
+
+    const deleteConversation = useCallback((id: string) => {
+      setConversations(prev => prev.filter(c => c.id !== id));
+      if (activeConversation === id) {
+        setActiveConversation(null);
+      }
+    }, [setConversations, activeConversation]);
+
+    const updateConversationSettings = useCallback((updates: Partial<Conversation>) => {
       if (!activeConversation) return;
       setConversations(prev => prev.map(c => 
         c.id === activeConversation ? { ...c, ...updates } : c
       ));
-    };
+    }, [activeConversation, setConversations]);
 
     return (
-      <div className="flex-1 flex">
-        <div className="w-64 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 p-4">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold">Conversations</h2>
-            <Button size="sm" onClick={() => createNewConversation()}>
+      <div className="flex h-full">
+        {/* Chat List */}
+        <div className="w-80 border-r border-gray-200 dark:border-gray-800 flex flex-col">
+          <div className="p-4 border-b border-gray-200 dark:border-gray-800">
+            <Button onClick={createNewConversation} className="w-full gap-2">
               <Plus className="w-4 h-4" />
+              New Chat
             </Button>
           </div>
           
-          <div className="space-y-2">
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
             {conversations.map(conv => (
               <div
                 key={conv.id}
-                className={`p-3 rounded-lg cursor-pointer transition-colors ${
-                  activeConversation === conv.id 
-                    ? 'bg-white dark:bg-gray-800 shadow-sm' 
-                    : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                className={`p-3 rounded-lg cursor-pointer group hover:bg-gray-100 dark:hover:bg-gray-800 ${
+                  activeConversation === conv.id ? 'bg-gray-100 dark:bg-gray-800' : ''
                 }`}
                 onClick={() => setActiveConversation(conv.id)}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium truncate">{conv.title}</span>
+                  <h4 className="font-medium truncate flex-1">{conv.title}</h4>
                   <Button
-                    size="icon"
                     variant="ghost"
-                    className="w-6 h-6 opacity-0 group-hover:opacity-100"
+                    size="icon"
+                    className="opacity-0 group-hover:opacity-100 w-6 h-6"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowDeleteDialog({ type: 'conversation', id: conv.id });
+                      deleteConversation(conv.id);
                     }}
                   >
                     <Trash2 className="w-3 h-3" />
                   </Button>
                 </div>
-                <div className="flex items-center justify-between mt-1">
-                  <span className="text-xs text-gray-500">
-                    {conv.messages.length} messages
-                  </span>
-                  <span className="text-xs text-gray-400">
-                    {MODEL_OPTIONS.find(m => m.value === conv.model)?.label || conv.model}
-                  </span>
-                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {conv.messages.length} messages • {new Date(conv.createdAt).toLocaleDateString()}
+                </p>
               </div>
             ))}
           </div>
         </div>
 
+        {/* Chat Area */}
         <div className="flex-1 flex flex-col">
-          {conversation ? (
+          {currentConversation ? (
             <>
-              <div className="border-b border-gray-200 dark:border-gray-800 p-4 flex items-center justify-between">
+              {/* Chat Header */}
+              <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
                 <div>
-                  <h2 className="font-semibold">{conversation.title}</h2>
-                  <p className="text-sm text-gray-500">
-                    {MODEL_OPTIONS.find(m => m.value === conversation.model)?.label || conversation.model}
+                  <h2 className="font-semibold">{currentConversation.title}</h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    {currentConversation.model} • {currentConversation.messages.length} messages
                   </p>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowConversationSettings(true)}
-                >
+                <Button variant="ghost" size="icon" onClick={() => setShowSettings(true)}>
                   <SlidersHorizontal className="w-4 h-4" />
                 </Button>
               </div>
 
+              {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {conversation.messages.map(message => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className={`flex items-start space-x-2 max-w-3xl ${message.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''}`}>
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                        message.role === 'user' 
-                          ? 'bg-blue-500 text-white' 
-                          : message.role === 'workflow'
-                          ? 'bg-yellow-500 text-white'
-                          : 'bg-gray-200 dark:bg-gray-700'
-                      }`}>
-                        {message.role === 'user' ? (
-                          <User className="w-4 h-4" />
-                        ) : message.role === 'workflow' ? (
-                          <Zap className="w-4 h-4" />
-                        ) : (
-                          <Bot className="w-4 h-4" />
-                        )}
+                {currentConversation.messages.map(message => (
+                  <div key={message.id} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    {message.role !== 'user' && (
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0">
+                        <Bot className="w-4 h-4 text-white" />
                       </div>
-                      <div className={`rounded-lg p-3 ${
-                        message.role === 'user'
-                          ? 'bg-blue-500 text-white'
-                          : message.role === 'workflow'
-                          ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200'
-                          : 'bg-gray-100 dark:bg-gray-800'
-                      }`}>
-                        {message.isThinking ? (
-                          <div className="flex items-center space-x-2">
-                            <Loader className="w-4 h-4" />
-                            <span>Thinking...</span>
-                          </div>
-                        ) : (
-                          <div className="whitespace-pre-wrap">{message.content}</div>
-                        )}
-                      </div>
+                    )}
+                    <div className={`max-w-[70%] p-3 rounded-lg ${
+                      message.role === 'user' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'bg-gray-100 dark:bg-gray-800'
+                    }`}>
+                      <p className="whitespace-pre-wrap">{message.content}</p>
                     </div>
+                    {message.role === 'user' && (
+                      <div className="w-8 h-8 rounded-full bg-gray-300 dark:bg-gray-700 flex items-center justify-center flex-shrink-0">
+                        <User className="w-4 h-4" />
+                      </div>
+                    )}
                   </div>
                 ))}
-                <div ref={messagesEndRef} />
+                {isLoading && (
+                  <div className="flex gap-3 justify-start">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0">
+                      <Bot className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="bg-gray-100 dark:bg-gray-800 p-3 rounded-lg">
+                      <Loader className="w-4 h-4" />
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <form onSubmit={handleSubmit} className="border-t border-gray-200 dark:border-gray-800 p-4">
-                <div className="flex space-x-2">
+              {/* Input */}
+              <div className="p-4 border-t border-gray-200 dark:border-gray-800">
+                <div className="flex gap-2">
                   <Input
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder="Type your message..."
-                    disabled={isGenerating}
+                    onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+                    disabled={isLoading}
                     className="flex-1"
                   />
-                  <Button type="submit" disabled={isGenerating || !input.trim()}>
-                    {isGenerating ? <Loader className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+                  <Button onClick={sendMessage} disabled={!input.trim() || isLoading}>
+                    <Send className="w-4 h-4" />
                   </Button>
                 </div>
-              </form>
-
-              <Modal
-                isOpen={showConversationSettings}
-                onClose={() => setShowConversationSettings(false)}
-                title="Conversation Settings"
-              >
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Model</label>
-                    <Select
-                      value={conversation.model}
-                      onChange={(e) => updateConversationSettings({ model: e.target.value as any })}
-                    >
-                      {MODEL_OPTIONS.map(option => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium mb-2">System Prompt</label>
-                    <Textarea
-                      value={conversation.systemPrompt}
-                      onChange={(e) => updateConversationSettings({ systemPrompt: e.target.value })}
-                      rows={3}
-                    />
-                  </div>
-                  
-                  <Slider
-                    label="Temperature"
-                    value={conversation.temperature}
-                    min={0}
-                    max={1}
-                    step={0.1}
-                    onChange={(e) => updateConversationSettings({ temperature: parseFloat(e.target.value) })}
-                  />
-                  
-                  <Slider
-                    label="Top P"
-                    value={conversation.topP}
-                    min={0}
-                    max={1}
-                    step={0.1}
-                    onChange={(e) => updateConversationSettings({ topP: parseFloat(e.target.value) })}
-                  />
-                </div>
-              </Modal>
+              </div>
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
-                <MessageSquare className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+                <MessageSquare className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                 <h3 className="text-lg font-semibold mb-2">No conversation selected</h3>
-                <p className="text-gray-500 mb-4">Choose a conversation or start a new one</p>
-                <Button onClick={() => createNewConversation()}>
+                <p className="text-gray-500 dark:text-gray-400 mb-4">Choose a conversation or start a new one</p>
+                <Button onClick={createNewConversation}>
                   <Plus className="w-4 h-4 mr-2" />
-                  New Conversation
+                  New Chat
                 </Button>
               </div>
             </div>
           )}
         </div>
-      </div>
-    );
-  };
 
-  const ImagesView = () => {
-    const [prompt, setPrompt] = useState('');
-
-    const handleGenerate = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!prompt.trim()) return;
-      generateImage(prompt.trim());
-      setPrompt('');
-    };
-
-    return (
-      <div className="flex-1 p-8">
-        <div className="max-w-6xl mx-auto">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold mb-4">Image Generation</h1>
-            <form onSubmit={handleGenerate} className="flex space-x-2">
-              <Input
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Describe the image you want to generate..."
-                className="flex-1"
-              />
-              <Button type="submit" disabled={!prompt.trim()}>
-                <ImageIcon className="w-4 h-4 mr-2" />
-                Generate
-              </Button>
-            </form>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {images.map(image => (
-              <Card key={image.id} className="overflow-hidden">
-                <div className="aspect-square bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
-                  {image.status === 'generating' ? (
-                    <div className="text-center">
-                      <Loader className="w-8 h-8 mx-auto mb-2" />
-                      <p className="text-sm text-gray-500">Generating...</p>
-                    </div>
-                  ) : image.status === 'error' ? (
-                    <div className="text-center text-red-500">
-                      <X className="w-8 h-8 mx-auto mb-2" />
-                      <p className="text-sm">Generation failed</p>
-                    </div>
-                  ) : (
-                    <img
-                      src={image.base64}
-                      alt={image.prompt}
-                      className="w-full h-full object-cover"
-                    />
-                  )}
-                </div>
-                <div className="p-4">
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-2 line-clamp-2">
-                    {image.prompt}
-                  </p>
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-gray-500">
-                      {new Date(image.createdAt).toLocaleDateString()}
-                    </span>
-                    {image.status === 'ready' && (
-                      <div className="flex space-x-1">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => {
-                            const link = document.createElement('a');
-                            link.href = image.base64;
-                            link.download = `generated-image-${image.id}.jpg`;
-                            link.click();
-                          }}
-                        >
-                          <Download className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => setShowDeleteDialog({ type: 'image', id: image.id })}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
-
-          {images.length === 0 && (
-            <div className="text-center py-12">
-              <ImageIcon className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-              <h3 className="text-lg font-semibold mb-2">No images generated yet</h3>
-              <p className="text-gray-500">Enter a prompt above to generate your first image</p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const WorkflowsView = () => {
-    const [showWorkflowModal, setShowWorkflowModal] = useState(false);
-    const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null);
-    const [workflowForm, setWorkflowForm] = useState({ name: '', webhookUrl: '' });
-
-    const handleSaveWorkflow = () => {
-      if (!workflowForm.name.trim() || !workflowForm.webhookUrl.trim()) return;
-
-      if (editingWorkflow) {
-        setWorkflows(prev => prev.map(w => 
-          w.id === editingWorkflow.id 
-            ? { ...w, name: workflowForm.name, webhookUrl: workflowForm.webhookUrl }
-            : w
-        ));
-      } else {
-        const newWorkflow: Workflow = {
-          id: Date.now().toString(),
-          name: workflowForm.name,
-          webhookUrl: workflowForm.webhookUrl
-        };
-        setWorkflows(prev => [newWorkflow, ...prev]);
-      }
-
-      setShowWorkflowModal(false);
-      setEditingWorkflow(null);
-      setWorkflowForm({ name: '', webhookUrl: '' });
-    };
-
-    const openWorkflowModal = (workflow?: Workflow) => {
-      if (workflow) {
-        setEditingWorkflow(workflow);
-        setWorkflowForm({ name: workflow.name, webhookUrl: workflow.webhookUrl });
-      } else {
-        setEditingWorkflow(null);
-        setWorkflowForm({ name: '', webhookUrl: '' });
-      }
-      setShowWorkflowModal(true);
-    };
-
-    return (
-      <div className="flex-1 p-8">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h1 className="text-3xl font-bold mb-2">Workflows</h1>
-              <p className="text-gray-600 dark:text-gray-400">
-                Manage your Make.com webhook integrations
-              </p>
-            </div>
-            <Button onClick={() => openWorkflowModal()}>
-              <Plus className="w-4 h-4 mr-2" />
-              Add Workflow
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {workflows.map(workflow => (
-              <Card key={workflow.id} className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <Zap className="w-8 h-8 text-yellow-500" />
-                  <div className="flex space-x-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => openWorkflowModal(workflow)}
-                    >
-                      <Edit className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => setShowDeleteDialog({ type: 'workflow', id: workflow.id })}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-                <h3 className="font-semibold mb-2">{workflow.name}</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 truncate">
-                  {workflow.webhookUrl}
-                </p>
-                <Button
-                  size="sm"
-                  className="w-full"
-                  onClick={() => {
-                    if (!activeConversation) {
-                      createNewConversation();
-                    }
-                    setCurrentView('chat');
-                  }}
-                >
-                  Use in Chat
-                </Button>
-              </Card>
-            ))}
-          </div>
-
-          {workflows.length === 0 && (
-            <div className="text-center py-12">
-              <Zap className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-              <h3 className="text-lg font-semibold mb-2">No workflows configured</h3>
-              <p className="text-gray-500 mb-4">Add your first Make.com webhook to get started</p>
-              <Button onClick={() => openWorkflowModal()}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Workflow
-              </Button>
-            </div>
-          )}
-
-          <Modal
-            isOpen={showWorkflowModal}
-            onClose={() => setShowWorkflowModal(false)}
-            title={editingWorkflow ? 'Edit Workflow' : 'Add Workflow'}
-          >
+        {/* Chat Settings Modal */}
+        {showSettings && currentConversation && (
+          <Modal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Chat Settings">
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">Name</label>
-                <Input
-                  value={workflowForm.name}
-                  onChange={(e) => setWorkflowForm(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="Enter workflow name"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Webhook URL</label>
-                <Input
-                  value={workflowForm.webhookUrl}
-                  onChange={(e) => setWorkflowForm(prev => ({ ...prev, webhookUrl: e.target.value }))}
-                  placeholder="https://hook.make.com/..."
-                />
-              </div>
-              <div className="flex justify-end space-x-2">
-                <Button variant="secondary" onClick={() => setShowWorkflowModal(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={handleSaveWorkflow}>
-                  {editingWorkflow ? 'Update' : 'Add'} Workflow
-                </Button>
-              </div>
-            </div>
-          </Modal>
-        </div>
-      </div>
-    );
-  };
-
-  const AgentsView = () => {
-    const [showAgentModal, setShowAgentModal] = useState(false);
-    const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
-    const [agentForm, setAgentForm] = useState({
-      name: '',
-      avatarColor: '#3B82F6',
-      model: 'gemini-2.5-flash' as const,
-      systemInstruction: ''
-    });
-
-    const handleSaveAgent = () => {
-      if (!agentForm.name.trim()) return;
-
-      if (editingAgent) {
-        setAgents(prev => prev.map(a => 
-          a.id === editingAgent.id 
-            ? { ...a, ...agentForm }
-            : a
-        ));
-      } else {
-        const newAgent: Agent = {
-          id: Date.now().toString(),
-          ...agentForm
-        };
-        setAgents(prev => [newAgent, ...prev]);
-      }
-
-      setShowAgentModal(false);
-      setEditingAgent(null);
-      setAgentForm({
-        name: '',
-        avatarColor: '#3B82F6',
-        model: 'gemini-2.5-flash',
-        systemInstruction: ''
-      });
-    };
-
-    const openAgentModal = (agent?: Agent) => {
-      if (agent) {
-        setEditingAgent(agent);
-        setAgentForm({
-          name: agent.name,
-          avatarColor: agent.avatarColor,
-          model: agent.model as any,
-          systemInstruction: agent.systemInstruction
-        });
-      } else {
-        setEditingAgent(null);
-        setAgentForm({
-          name: '',
-          avatarColor: '#3B82F6',
-          model: 'gemini-2.5-flash',
-          systemInstruction: ''
-        });
-      }
-      setShowAgentModal(true);
-    };
-
-    const startChatWithAgent = (agent: Agent) => {
-      const newConversation: Conversation = {
-        id: Date.now().toString(),
-        title: `Chat with ${agent.name}`,
-        messages: [],
-        systemPrompt: agent.systemInstruction,
-        temperature: 0.7,
-        topP: 0.9,
-        model: agent.model as any,
-        createdAt: Date.now()
-      };
-      setConversations(prev => [newConversation, ...prev]);
-      setActiveConversation(newConversation.id);
-      setCurrentView('chat');
-    };
-
-    return (
-      <div className="flex-1 p-8">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h1 className="text-3xl font-bold mb-2">AI Agents</h1>
-              <p className="text-gray-600 dark:text-gray-400">
-                Create and manage specialized AI agents
-              </p>
-            </div>
-            <Button onClick={() => openAgentModal()}>
-              <Plus className="w-4 h-4 mr-2" />
-              Create Agent
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {agents.map(agent => (
-              <Card key={agent.id} className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div
-                    className="w-12 h-12 rounded-full flex items-center justify-center text-white"
-                    style={{ backgroundColor: agent.avatarColor }}
-                  >
-                    <Bot className="w-6 h-6" />
-                  </div>
-                  <div className="flex space-x-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => openAgentModal(agent)}
-                    >
-                      <Edit className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => setShowDeleteDialog({ type: 'agent', id: agent.id })}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-                <h3 className="font-semibold mb-2">{agent.name}</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-                  {MODEL_OPTIONS.find(m => m.value === agent.model)?.label || agent.model}
-                </p>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 line-clamp-2">
-                  {agent.systemInstruction || 'No system instruction set'}
-                </p>
-                <Button
-                  size="sm"
-                  className="w-full"
-                  onClick={() => startChatWithAgent(agent)}
-                >
-                  Start Chat
-                </Button>
-              </Card>
-            ))}
-          </div>
-
-          {agents.length === 0 && (
-            <div className="text-center py-12">
-              <Bot className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-              <h3 className="text-lg font-semibold mb-2">No agents created yet</h3>
-              <p className="text-gray-500 mb-4">Create your first AI agent to get started</p>
-              <Button onClick={() => openAgentModal()}>
-                <Plus className="w-4 h-4 mr-2" />
-                Create Agent
-              </Button>
-            </div>
-          )}
-
-          <Modal
-            isOpen={showAgentModal}
-            onClose={() => setShowAgentModal(false)}
-            title={editingAgent ? 'Edit Agent' : 'Create Agent'}
-          >
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">Name</label>
-                <Input
-                  value={agentForm.name}
-                  onChange={(e) => setAgentForm(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="Enter agent name"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium mb-2">Avatar Color</label>
-                <input
-                  type="color"
-                  value={agentForm.avatarColor}
-                  onChange={(e) => setAgentForm(prev => ({ ...prev, avatarColor: e.target.value }))}
-                  className="w-full h-10 rounded border border-gray-300 dark:border-gray-700"
-                />
-              </div>
-              
               <div>
                 <label className="block text-sm font-medium mb-2">Model</label>
                 <Select
-                  value={agentForm.model}
-                  onChange={(e) => setAgentForm(prev => ({ ...prev, model: e.target.value as any }))}
+                  value={currentConversation.model}
+                  onChange={(e) => updateConversationSettings({ model: e.target.value as any })}
                 >
-                  {MODEL_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
+                  {MODELS.map(model => (
+                    <option key={model.value} value={model.value}>{model.label}</option>
                   ))}
                 </Select>
               </div>
               
               <div>
-                <label className="block text-sm font-medium mb-2">System Instruction</label>
+                <label className="block text-sm font-medium mb-2">System Prompt</label>
                 <Textarea
-                  value={agentForm.systemInstruction}
-                  onChange={(e) => setAgentForm(prev => ({ ...prev, systemInstruction: e.target.value }))}
-                  placeholder="Define the agent's role and behavior..."
-                  rows={4}
+                  value={currentConversation.systemPrompt}
+                  onChange={(e) => updateConversationSettings({ systemPrompt: e.target.value })}
+                  rows={3}
                 />
               </div>
               
-              <div className="flex justify-end space-x-2">
-                <Button variant="secondary" onClick={() => setShowAgentModal(false)}>
-                  Cancel
+              <Slider
+                label="Temperature"
+                value={currentConversation.temperature}
+                min={0}
+                max={1}
+                step={0.1}
+                onChange={(e) => updateConversationSettings({ temperature: parseFloat(e.target.value) })}
+              />
+              
+              <Slider
+                label="Top P"
+                value={currentConversation.topP}
+                min={0}
+                max={1}
+                step={0.1}
+                onChange={(e) => updateConversationSettings({ topP: parseFloat(e.target.value) })}
+              />
+            </div>
+          </Modal>
+        )}
+      </div>
+    );
+  };
+
+  // Image Generation View
+  const ImageView: React.FC = () => {
+    const [prompt, setPrompt] = useState('');
+    const [isGenerating, setIsGenerating] = useState(false);
+
+    const generateImage = useCallback(async () => {
+      if (!prompt.trim() || isGenerating) return;
+
+      const newImage: ImageObject = {
+        id: Date.now().toString(),
+        prompt: prompt.trim(),
+        base64: '',
+        status: 'generating',
+        createdAt: Date.now()
+      };
+
+      setImages(prev => [newImage, ...prev]);
+      setPrompt('');
+      setIsGenerating(true);
+
+      try {
+        const imageBytes = await generateImages(prompt.trim());
+        const base64 = `data:image/jpeg;base64,${imageBytes[0]}`;
+        
+        setImages(prev => prev.map(img => 
+          img.id === newImage.id 
+            ? { ...img, base64, status: 'ready' as const }
+            : img
+        ));
+      } catch (error) {
+        console.error('Error generating image:', error);
+        setImages(prev => prev.map(img => 
+          img.id === newImage.id 
+            ? { ...img, status: 'error' as const }
+            : img
+        ));
+      } finally {
+        setIsGenerating(false);
+      }
+    }, [prompt, isGenerating, setImages]);
+
+    const deleteImage = useCallback((id: string) => {
+      setImages(prev => prev.filter(img => img.id !== id));
+    }, [setImages]);
+
+    return (
+      <div className="p-8">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold mb-2">Image Generation</h1>
+          <p className="text-gray-600 dark:text-gray-400">Create stunning images with AI</p>
+        </div>
+
+        <Card className="p-6 mb-8">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Image Prompt</label>
+              <Textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Describe the image you want to generate..."
+                rows={3}
+              />
+            </div>
+            <Button 
+              onClick={generateImage} 
+              disabled={!prompt.trim() || isGenerating}
+              className="w-full"
+            >
+              {isGenerating ? (
+                <>
+                  <Loader className="w-4 h-4 mr-2" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Image className="w-4 h-4 mr-2" />
+                  Generate Image
+                </>
+              )}
+            </Button>
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {images.map(image => (
+            <Card key={image.id} className="overflow-hidden">
+              <div className="aspect-square bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
+                {image.status === 'generating' && (
+                  <Loader className="w-8 h-8 text-gray-400" />
+                )}
+                {image.status === 'ready' && image.base64 && (
+                  <img src={image.base64} alt={image.prompt} className="w-full h-full object-cover" />
+                )}
+                {image.status === 'error' && (
+                  <div className="text-center text-gray-500">
+                    <X className="w-8 h-8 mx-auto mb-2" />
+                    <p className="text-sm">Generation failed</p>
+                  </div>
+                )}
+              </div>
+              <div className="p-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-3 line-clamp-2">{image.prompt}</p>
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-500">
+                    {new Date(image.createdAt).toLocaleDateString()}
+                  </span>
+                  <div className="flex gap-2">
+                    {image.status === 'ready' && image.base64 && (
+                      <Button variant="ghost" size="icon" onClick={() => {
+                        const link = document.createElement('a');
+                        link.href = image.base64;
+                        link.download = `generated-image-${image.id}.jpg`;
+                        link.click();
+                      }}>
+                        <Download className="w-4 h-4" />
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="icon" onClick={() => deleteImage(image.id)}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+
+        {images.length === 0 && (
+          <div className="text-center py-12">
+            <Image className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">No images generated yet</h3>
+            <p className="text-gray-500 dark:text-gray-400">Create your first AI-generated image above</p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Workflows View
+  const WorkflowsView: React.FC = () => {
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [newWorkflow, setNewWorkflow] = useState({ name: '', webhookUrl: '' });
+    const [testMessage, setTestMessage] = useState('');
+    const [testingWorkflow, setTestingWorkflow] = useState<string | null>(null);
+    const [testResults, setTestResults] = useState<Record<string, string>>({});
+
+    const createWorkflow = useCallback(() => {
+      if (!newWorkflow.name.trim() || !newWorkflow.webhookUrl.trim()) return;
+
+      const workflow: Workflow = {
+        id: Date.now().toString(),
+        name: newWorkflow.name.trim(),
+        webhookUrl: newWorkflow.webhookUrl.trim()
+      };
+
+      setWorkflows(prev => [...prev, workflow]);
+      setNewWorkflow({ name: '', webhookUrl: '' });
+      setShowCreateModal(false);
+    }, [newWorkflow, setWorkflows]);
+
+    const deleteWorkflow = useCallback((id: string) => {
+      setWorkflows(prev => prev.filter(w => w.id !== id));
+    }, [setWorkflows]);
+
+    const testWorkflow = useCallback(async (workflow: Workflow) => {
+      if (!testMessage.trim() || testingWorkflow) return;
+
+      setTestingWorkflow(workflow.id);
+      try {
+        const result = await postToWebhook(workflow.webhookUrl, testMessage, settings.makeApiKey);
+        setTestResults(prev => ({ ...prev, [workflow.id]: result }));
+      } catch (error) {
+        setTestResults(prev => ({ 
+          ...prev, 
+          [workflow.id]: `Error: ${error instanceof Error ? error.message : 'Unknown error'}` 
+        }));
+      } finally {
+        setTestingWorkflow(null);
+      }
+    }, [testMessage, testingWorkflow, settings.makeApiKey]);
+
+    return (
+      <div className="p-8">
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold mb-2">Workflows</h1>
+            <p className="text-gray-600 dark:text-gray-400">Automate tasks with Make.com webhooks</p>
+          </div>
+          <Button onClick={() => setShowCreateModal(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            New Workflow
+          </Button>
+        </div>
+
+        {!settings.makeApiKey && (
+          <Card className="p-6 mb-6 border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
+            <div className="flex items-center gap-3">
+              <HelpCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
+              <div>
+                <h3 className="font-semibold text-yellow-800 dark:text-yellow-200">API Key Required</h3>
+                <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                  Configure your Make.com API key in Settings to test workflows.
+                </p>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {workflows.map(workflow => (
+            <Card key={workflow.id} className="p-6">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold text-lg">{workflow.name}</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 break-all">{workflow.webhookUrl}</p>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => deleteWorkflow(workflow.id)}>
+                  <Trash2 className="w-4 h-4" />
                 </Button>
-                <Button onClick={handleSaveAgent}>
-                  {editingAgent ? 'Update' : 'Create'} Agent
+              </div>
+
+              {settings.makeApiKey && (
+                <div className="space-y-3">
+                  <div className="flex gap-2">
+                    <Input
+                      value={testMessage}
+                      onChange={(e) => setTestMessage(e.target.value)}
+                      placeholder="Test message..."
+                      className="flex-1"
+                    />
+                    <Button 
+                      onClick={() => testWorkflow(workflow)}
+                      disabled={!testMessage.trim() || testingWorkflow === workflow.id}
+                      size="sm"
+                    >
+                      {testingWorkflow === workflow.id ? (
+                        <Loader className="w-4 h-4" />
+                      ) : (
+                        <Send className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </div>
+
+                  {testResults[workflow.id] && (
+                    <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                      <p className="text-sm font-medium mb-1">Response:</p>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">
+                        {testResults[workflow.id]}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          ))}
+        </div>
+
+        {workflows.length === 0 && (
+          <div className="text-center py-12">
+            <Zap className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">No workflows created yet</h3>
+            <p className="text-gray-500 dark:text-gray-400 mb-4">Create your first workflow to automate tasks</p>
+            <Button onClick={() => setShowCreateModal(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Create Workflow
+            </Button>
+          </div>
+        )}
+
+        {/* Create Workflow Modal */}
+        <Modal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} title="Create New Workflow">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Workflow Name</label>
+              <Input
+                value={newWorkflow.name}
+                onChange={(e) => setNewWorkflow(prev => ({ ...prev, name: e.target.value }))}
+                placeholder="My Workflow"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Webhook URL</label>
+              <Input
+                value={newWorkflow.webhookUrl}
+                onChange={(e) => setNewWorkflow(prev => ({ ...prev, webhookUrl: e.target.value }))}
+                placeholder="https://hook.make.com/..."
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-4">
+              <Button variant="secondary" onClick={() => setShowCreateModal(false)}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={createWorkflow}
+                disabled={!newWorkflow.name.trim() || !newWorkflow.webhookUrl.trim()}
+              >
+                Create
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      </div>
+    );
+  };
+
+  // Agents View
+  const AgentsView: React.FC = () => {
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+    const [newAgent, setNewAgent] = useState({
+      name: '',
+      avatarColor: AVATAR_COLORS[0],
+      model: 'gemini-2.5-flash' as const,
+      systemInstruction: ''
+    });
+
+    const createAgent = useCallback(() => {
+      if (!newAgent.name.trim()) return;
+
+      const agent: Agent = {
+        id: Date.now().toString(),
+        name: newAgent.name.trim(),
+        avatarColor: newAgent.avatarColor,
+        model: newAgent.model,
+        systemInstruction: newAgent.systemInstruction.trim() || DEFAULT_SYSTEM_PROMPT
+      };
+
+      setAgents(prev => [...prev, agent]);
+      setNewAgent({
+        name: '',
+        avatarColor: AVATAR_COLORS[0],
+        model: 'gemini-2.5-flash',
+        systemInstruction: ''
+      });
+      setShowCreateModal(false);
+    }, [newAgent, setAgents]);
+
+    const updateAgent = useCallback(() => {
+      if (!editingAgent || !newAgent.name.trim()) return;
+
+      const updatedAgent: Agent = {
+        ...editingAgent,
+        name: newAgent.name.trim(),
+        avatarColor: newAgent.avatarColor,
+        model: newAgent.model,
+        systemInstruction: newAgent.systemInstruction.trim() || DEFAULT_SYSTEM_PROMPT
+      };
+
+      setAgents(prev => prev.map(a => a.id === editingAgent.id ? updatedAgent : a));
+      setEditingAgent(null);
+      setNewAgent({
+        name: '',
+        avatarColor: AVATAR_COLORS[0],
+        model: 'gemini-2.5-flash',
+        systemInstruction: ''
+      });
+    }, [editingAgent, newAgent, setAgents]);
+
+    const deleteAgent = useCallback((id: string) => {
+      setAgents(prev => prev.filter(a => a.id !== id));
+    }, [setAgents]);
+
+    const startEditingAgent = useCallback((agent: Agent) => {
+      setEditingAgent(agent);
+      setNewAgent({
+        name: agent.name,
+        avatarColor: agent.avatarColor,
+        model: agent.model,
+        systemInstruction: agent.systemInstruction
+      });
+    }, []);
+
+    return (
+      <div className="p-8">
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold mb-2">AI Agents</h1>
+            <p className="text-gray-600 dark:text-gray-400">Create specialized AI assistants</p>
+          </div>
+          <Button onClick={() => setShowCreateModal(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            New Agent
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {agents.map(agent => (
+            <Card key={agent.id} className="p-6">
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div 
+                    className="w-10 h-10 rounded-full flex items-center justify-center"
+                    style={{ backgroundColor: agent.avatarColor }}
+                  >
+                    <Bot className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold">{agent.name}</h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {MODELS.find(m => m.value === agent.model)?.label}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="icon" onClick={() => startEditingAgent(agent)}>
+                    <Edit className="w-4 h-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => deleteAgent(agent.id)}>
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+              
+              <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
+                {agent.systemInstruction}
+              </p>
+            </Card>
+          ))}
+        </div>
+
+        {agents.length === 0 && (
+          <div className="text-center py-12">
+            <Bot className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">No agents created yet</h3>
+            <p className="text-gray-500 dark:text-gray-400 mb-4">Create your first AI agent</p>
+            <Button onClick={() => setShowCreateModal(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Create Agent
+            </Button>
+          </div>
+        )}
+
+        {/* Create/Edit Agent Modal */}
+        <Modal 
+          isOpen={showCreateModal || !!editingAgent} 
+          onClose={() => {
+            setShowCreateModal(false);
+            setEditingAgent(null);
+            setNewAgent({
+              name: '',
+              avatarColor: AVATAR_COLORS[0],
+              model: 'gemini-2.5-flash',
+              systemInstruction: ''
+            });
+          }} 
+          title={editingAgent ? 'Edit Agent' : 'Create New Agent'}
+        >
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Agent Name</label>
+              <Input
+                value={newAgent.name}
+                onChange={(e) => setNewAgent(prev => ({ ...prev, name: e.target.value }))}
+                placeholder="My AI Assistant"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-2">Avatar Color</label>
+              <div className="flex gap-2">
+                {AVATAR_COLORS.map(color => (
+                  <button
+                    key={color}
+                    className={`w-8 h-8 rounded-full border-2 ${
+                      newAgent.avatarColor === color ? 'border-gray-400' : 'border-transparent'
+                    }`}
+                    style={{ backgroundColor: color }}
+                    onClick={() => setNewAgent(prev => ({ ...prev, avatarColor: color }))}
+                  />
+                ))}
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-2">Model</label>
+              <Select
+                value={newAgent.model}
+                onChange={(e) => setNewAgent(prev => ({ ...prev, model: e.target.value as any }))}
+              >
+                {MODELS.map(model => (
+                  <option key={model.value} value={model.value}>{model.label}</option>
+                ))}
+              </Select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-2">System Instruction</label>
+              <Textarea
+                value={newAgent.systemInstruction}
+                onChange={(e) => setNewAgent(prev => ({ ...prev, systemInstruction: e.target.value }))}
+                placeholder="You are a helpful assistant specialized in..."
+                rows={4}
+              />
+            </div>
+            
+            <div className="flex justify-end gap-2 pt-4">
+              <Button variant="secondary" onClick={() => {
+                setShowCreateModal(false);
+                setEditingAgent(null);
+                setNewAgent({
+                  name: '',
+                  avatarColor: AVATAR_COLORS[0],
+                  model: 'gemini-2.5-flash',
+                  systemInstruction: ''
+                });
+              }}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={editingAgent ? updateAgent : createAgent}
+                disabled={!newAgent.name.trim()}
+              >
+                {editingAgent ? 'Update' : 'Create'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      </div>
+    );
+  };
+
+  // Settings View
+  const SettingsView: React.FC = () => {
+    const [showApiKey, setShowApiKey] = useState(false);
+
+    const updateSettings = useCallback((updates: Partial<typeof settings>) => {
+      setSettings(prev => ({ ...prev, ...updates }));
+    }, [setSettings]);
+
+    return (
+      <div className="p-8">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold mb-2">Settings</h1>
+          <p className="text-gray-600 dark:text-gray-400">Configure your AI automation platform</p>
+        </div>
+
+        <div className="max-w-2xl space-y-6">
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-4">API Configuration</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Make.com API Key</label>
+                <div className="flex gap-2">
+                  <Input
+                    type={showApiKey ? 'text' : 'password'}
+                    value={settings.makeApiKey}
+                    onChange={(e) => updateSettings({ makeApiKey: e.target.value })}
+                    placeholder="Enter your Make.com API key"
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                  >
+                    {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Required for workflow testing and automation
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-4">Default Chat Settings</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Default Model</label>
+                <Select
+                  value={settings.defaultModel}
+                  onChange={(e) => updateSettings({ defaultModel: e.target.value as any })}
+                >
+                  {MODELS.map(model => (
+                    <option key={model.value} value={model.value}>{model.label}</option>
+                  ))}
+                </Select>
+              </div>
+              
+              <Slider
+                label="Default Temperature"
+                value={settings.defaultTemperature}
+                min={0}
+                max={1}
+                step={0.1}
+                onChange={(e) => updateSettings({ defaultTemperature: parseFloat(e.target.value) })}
+              />
+              
+              <Slider
+                label="Default Top P"
+                value={settings.defaultTopP}
+                min={0}
+                max={1}
+                step={0.1}
+                onChange={(e) => updateSettings({ defaultTopP: parseFloat(e.target.value) })}
+              />
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-4">Data Management</h3>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Export Data</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Download all your conversations and settings</p>
+                </div>
+                <Button variant="secondary" onClick={() => {
+                  const data = {
+                    conversations,
+                    images,
+                    workflows,
+                    agents,
+                    settings,
+                    exportDate: new Date().toISOString()
+                  };
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `model-lab-export-${new Date().toISOString().split('T')[0]}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Export
+                </Button>
+              </div>
+              
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Clear All Data</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Remove all conversations, images, and settings</p>
+                </div>
+                <Button variant="danger" onClick={() => {
+                  if (confirm('Are you sure? This will delete all your data permanently.')) {
+                    localStorage.clear();
+                    window.location.reload();
+                  }
+                }}>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Clear All
                 </Button>
               </div>
             </div>
-          </Modal>
+          </Card>
         </div>
       </div>
     );
   };
 
-  const HelpView = () => (
-    <div className="flex-1 p-8">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold mb-8">Help & Documentation</h1>
-        
-        <div className="space-y-8">
-          <Card className="p-6">
-            <h2 className="text-xl font-semibold mb-4">Getting Started</h2>
-            <div className="space-y-4">
-              <div>
-                <h3 className="font-medium mb-2">1. Configure API Keys</h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Set up your Gemini and OpenAI API keys in the Settings to enable AI features.
-                </p>
-              </div>
-              <div>
-                <h3 className="font-medium mb-2">2. Start Chatting</h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Create a new conversation and choose between different AI models like Gemini 2.5 Flash or GPT-4o.
-                </p>
-              </div>
-              <div>
-                <h3 className="font-medium mb-2">3. Generate Images</h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Use the Images section to generate AI-powered images with detailed prompts.
-                </p>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="p-6">
-            <h2 className="text-xl font-semibold mb-4">Features</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <h3 className="font-medium mb-2 flex items-center">
-                  <MessageSquare className="w-4 h-4 mr-2" />
-                  Multi-Model Chat
-                </h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Support for Gemini 2.5 Flash, GPT-4o, GPT-4o Mini, and GPT-3.5 Turbo models.
-                </p>
-              </div>
-              <div>
-                <h3 className="font-medium mb-2 flex items-center">
-                  <ImageIcon className="w-4 h-4 mr-2" />
-                  Image Generation
-                </h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Generate high-quality images using Google's Imagen 3.0 model.
-                </p>
-              </div>
-              <div>
-                <h3 className="font-medium mb-2 flex items-center">
-                  <Zap className="w-4 h-4 mr-2" />
-                  Workflow Integration
-                </h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Connect with Make.com webhooks for automated workflows.
-                </p>
-              </div>
-              <div>
-                <h3 className="font-medium mb-2 flex items-center">
-                  <Bot className="w-4 h-4 mr-2" />
-                  Custom Agents
-                </h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Create specialized AI agents with custom instructions and personalities.
-                </p>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="p-6">
-            <h2 className="text-xl font-semibold mb-4">Keyboard Shortcuts</h2>
-            <div className="space-y-2">
-              <div className="flex justify-between">
-                <span className="text-sm">New Conversation</span>
-                <kbd className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-xs">Ctrl + N</kbd>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-sm">Toggle Theme</span>
-                <kbd className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-xs">Ctrl + D</kbd>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-sm">Focus Message Input</span>
-                <kbd className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-xs">Ctrl + /</kbd>
-              </div>
-            </div>
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
-
-  const SettingsModal = () => (
-    <Modal
-      isOpen={showSettingsModal}
-      onClose={() => setShowSettingsModal(false)}
-      title="Settings"
-      size="xl"
-    >
-      <div className="space-y-6">
-        <div>
-          <h3 className="text-lg font-semibold mb-4">API Configuration</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">Make.com API Key</label>
-              <Input
-                type="password"
-                value={settings.makeApiKey}
-                onChange={(e) => setSettings(prev => ({ ...prev, makeApiKey: e.target.value }))}
-                placeholder="Enter your Make.com API key"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Required for workflow integrations
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <h3 className="text-lg font-semibold mb-4">Default Settings</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">Default Model</label>
-              <Select
-                value={settings.defaultModel}
-                onChange={(e) => setSettings(prev => ({ ...prev, defaultModel: e.target.value as any }))}
-              >
-                {MODEL_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </Select>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <h3 className="text-lg font-semibold mb-4">Data Management</h3>
-          <div className="space-y-2">
-            <Button
-              variant="danger"
-              onClick={() => {
-                if (confirm('Are you sure you want to clear all conversations? This cannot be undone.')) {
-                  setConversations([]);
-                  setActiveConversation(null);
-                }
-              }}
-            >
-              Clear All Conversations
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                if (confirm('Are you sure you want to clear all images? This cannot be undone.')) {
-                  setImages([]);
-                }
-              }}
-            >
-              Clear All Images
-            </Button>
-          </div>
-        </div>
-      </div>
-    </Modal>
-  );
+  // Render current view
+  const renderCurrentView = () => {
+    switch (currentView) {
+      case 'home': return <DashboardView />;
+      case 'chat': return <ChatView />;
+      case 'images': return <ImageView />;
+      case 'workflows': return <WorkflowsView />;
+      case 'agents': return <AgentsView />;
+      case 'settings': return <SettingsView />;
+      default: return <DashboardView />;
+    }
+  };
 
   return (
     <div className="h-screen flex bg-white dark:bg-black text-black dark:text-white">
       <Sidebar />
-      
-      {currentView === 'home' && <HomeView />}
-      {currentView === 'chat' && <ChatView />}
-      {currentView === 'images' && <ImagesView />}
-      {currentView === 'workflows' && <WorkflowsView />}
-      {currentView === 'agents' && <AgentsView />}
-      {currentView === 'help' && <HelpView />}
-
-      <SettingsModal />
-
-      <Dialog
-        isOpen={!!showDeleteDialog}
-        onClose={() => setShowDeleteDialog(null)}
-        title="Confirm Deletion"
-        description={`Are you sure you want to delete this ${showDeleteDialog?.type}? This action cannot be undone.`}
-        onConfirm={() => showDeleteDialog && deleteItem(showDeleteDialog.type, showDeleteDialog.id)}
-        confirmText="Delete"
-      />
+      <main className="flex-1 overflow-hidden">
+        {renderCurrentView()}
+      </main>
     </div>
   );
-}
+};
 
 export default App;

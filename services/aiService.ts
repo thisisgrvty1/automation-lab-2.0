@@ -20,6 +20,7 @@ if (openaiApiKey) {
 }
 
 export const streamChat = async (conversation: Conversation) => {
+    const { model } = conversation;
     if (model.startsWith('gpt-')) {
         return streamOpenAIChat(conversation);
     } else {
@@ -38,7 +39,7 @@ const streamGeminiChat = async (conversation: Conversation) => {
     const { systemPrompt, temperature, topP, messages } = conversation;
 
     const chat = geminiAI.chats.create({
-        model: 'gemini-2.5-flash',
+        model: conversation.model,
         config: {
             systemInstruction: systemPrompt,
             temperature: temperature,
@@ -164,7 +165,7 @@ export const getTitleForChat = async (firstMessage: string, model: string = 'gem
                 return "New Chat";
             }
             const response = await geminiAI.models.generateContent({
-                model: 'gemini-2.5-flash',
+                model: model,
                 contents: `Summarize the following user query into a short, 3-5 word title for a chat log. Do not use quotes. Query: "${firstMessage}"`,
                 config: {
                     temperature: 0.1,
