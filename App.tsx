@@ -40,7 +40,8 @@ const useLocalStorage = <T,>(key: string, defaultValue: T) => {
     try {
       const item = localStorage.getItem(key);
       return item ? JSON.parse(item) : defaultValue;
-    } catch {
+    } catch (error) {
+      console.error(`Error reading from localStorage key "${key}":`, error);
       return defaultValue;
     }
   });
@@ -51,7 +52,7 @@ const useLocalStorage = <T,>(key: string, defaultValue: T) => {
       try {
         localStorage.setItem(key, JSON.stringify(valueToStore));
       } catch (error) {
-        console.error(`Error saving to localStorage:`, error);
+        console.error(`Error saving to localStorage key "${key}":`, error);
       }
       return valueToStore;
     });
@@ -74,6 +75,23 @@ const useTheme = () => {
   return { theme, toggleTheme };
 };
 
+// Debounce hook for performance optimization
+const useDebounce = <T,>(value: T, delay: number) => {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+};
+
 // Main App Component
 const App: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
@@ -90,6 +108,13 @@ const App: React.FC = () => {
     defaultTemperature: 0.7,
     defaultTopP: 0.9
   });
+
+  // Clear API cache when settings change
+  useEffect(() => {
+    import('./services/aiService').then(({ clearApiKeyCache }) => {
+      clearApiKeyCache();
+    });
+  }, [settings.openaiApiKey, settings.geminiApiKey]);
 
   // Navigation
   const NavigationButton: React.FC<{
@@ -164,6 +189,13 @@ const App: React.FC = () => {
       </Card>
     );
 
+    const recentConversations = useMemo(() => 
+      conversations
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 3),
+      [conversations]
+    );
+
     return (
       <div className="p-8">
         <div className="mb-8">
@@ -200,7 +232,7 @@ const App: React.FC = () => {
           <Card className="p-6">
             <h3 className="text-lg font-semibold mb-4">Recent Activity</h3>
             <div className="space-y-3">
-              {conversations.slice(0, 3).map(conv => (
+              {recentConversations.map(conv => (
                 <div key={conv.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
                   <MessageSquare className="w-4 h-4 text-gray-400" />
                   <div className="flex-1 min-w-0">
@@ -225,11 +257,25 @@ const App: React.FC = () => {
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const debouncedInput = useDebounce(input, 300);
 
     const currentConversation = useMemo(() => 
       conversations.find(c => c.id === activeConversation), 
       [conversations, activeConversation]
     );
+
+    // Auto-scroll to bottom when new messages arrive
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+    
+    const scrollToBottom = useCallback(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, []);
+
+    useEffect(() => {
+      scrollToBottom();
+    }, [currentConversation?.messages, scrollToBottom]);
 
     const createNewConversation = useCallback(() => {
       const newConv: Conversation = {
@@ -244,15 +290,30 @@ const App: React.FC = () => {
       };
       setConversations(prev => [newConv, ...prev]);
       setActiveConversation(newConv.id);
+      setError(null);
     }, [setConversations, settings]);
 
     const sendMessage = useCallback(async () => {
-      if (!input.trim() || !currentConversation || isLoading) return;
+      const trimmedInput = input.trim();
+      if (!trimmedInput || !currentConversation || isLoading) return;
+
+      // Validate API keys
+      const model = currentConversation.model;
+      if (model.startsWith('gpt-') && !settings.openaiApiKey) {
+        setError('OpenAI API key is required for GPT models. Please configure it in Settings.');
+        return;
+      }
+      if (model.startsWith('gemini-') && !settings.geminiApiKey) {
+        setError('Gemini API key is required for Gemini models. Please configure it in Settings.');
+        return;
+      }
+
+      setError(null);
 
       const userMessage: Message = {
         id: Date.now().toString(),
         role: 'user',
-        content: input.trim()
+        content: trimmedInput
       };
 
       const updatedConversation = {
@@ -267,10 +328,15 @@ const App: React.FC = () => {
       try {
         // Generate title for first message
         if (currentConversation.messages.length === 0) {
-          const title = await getTitleForChat(input.trim(), currentConversation.model);
-          setConversations(prev => prev.map(c => 
-            c.id === activeConversation ? { ...c, title } : c
-          ));
+          try {
+            const title = await getTitleForChat(trimmedInput, currentConversation.model);
+            setConversations(prev => prev.map(c => 
+              c.id === activeConversation ? { ...c, title } : c
+            ));
+          } catch (titleError) {
+            console.warn('Failed to generate title:', titleError);
+            // Continue with default title
+          }
         }
 
         const assistantMessage: Message = {
@@ -305,10 +371,13 @@ const App: React.FC = () => {
         }
       } catch (error) {
         console.error('Error sending message:', error);
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        setError(errorMessage);
+        
         const errorMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: 'model',
-          content: `Error: ${error instanceof Error ? error.message : 'An unknown error occurred'}`
+          content: `Error: ${errorMessage}`
         };
         
         setConversations(prev => prev.map(c => 
@@ -319,12 +388,13 @@ const App: React.FC = () => {
       } finally {
         setIsLoading(false);
       }
-    }, [input, currentConversation, isLoading, activeConversation, setConversations]);
+    }, [input, currentConversation, isLoading, activeConversation, setConversations, settings.openaiApiKey, settings.geminiApiKey]);
 
     const deleteConversation = useCallback((id: string) => {
       setConversations(prev => prev.filter(c => c.id !== id));
       if (activeConversation === id) {
         setActiveConversation(null);
+        setError(null);
       }
     }, [setConversations, activeConversation]);
 
@@ -334,6 +404,14 @@ const App: React.FC = () => {
         c.id === activeConversation ? { ...c, ...updates } : c
       ));
     }, [activeConversation, setConversations]);
+
+    // Keyboard shortcuts
+    const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    }, [sendMessage]);
 
     return (
       <div className="flex h-full">
@@ -374,6 +452,12 @@ const App: React.FC = () => {
                 </p>
               </div>
             ))}
+            {conversations.length === 0 && (
+              <div className="text-center py-8">
+                <MessageSquare className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                <p className="text-sm text-gray-500 dark:text-gray-400">No conversations yet</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -393,6 +477,19 @@ const App: React.FC = () => {
                   <SlidersHorizontal className="w-4 h-4" />
                 </Button>
               </div>
+
+              {/* Error Display */}
+              {error && (
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800">
+                  <div className="flex items-center gap-2">
+                    <X className="w-4 h-4 text-red-500" />
+                    <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+                    <Button variant="ghost" size="icon" onClick={() => setError(null)} className="ml-auto">
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -427,21 +524,24 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 )}
+                <div ref={messagesEndRef} />
               </div>
 
               {/* Input */}
               <div className="p-4 border-t border-gray-200 dark:border-gray-800">
                 <div className="flex gap-2">
-                  <Input
+                  <Textarea
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="Type your message..."
-                    onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+                    placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+                    onKeyDown={handleKeyDown}
                     disabled={isLoading}
                     className="flex-1"
+                    rows={1}
+                    style={{ minHeight: '40px', maxHeight: '120px' }}
                   />
                   <Button onClick={sendMessage} disabled={!input.trim() || isLoading}>
-                    <Send className="w-4 h-4" />
+                    {isLoading ? <Loader className="w-4 h-4" /> : <Send className="w-4 h-4" />}
                   </Button>
                 </div>
               </div>
@@ -514,13 +614,22 @@ const App: React.FC = () => {
   const ImageView: React.FC = () => {
     const [prompt, setPrompt] = useState('');
     const [isGenerating, setIsGenerating] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const generateImage = useCallback(async () => {
-      if (!prompt.trim() || isGenerating) return;
+      const trimmedPrompt = prompt.trim();
+      if (!trimmedPrompt || isGenerating) return;
+
+      if (!settings.geminiApiKey) {
+        setError('Gemini API key is required for image generation. Please configure it in Settings.');
+        return;
+      }
+
+      setError(null);
 
       const newImage: ImageObject = {
         id: Date.now().toString(),
-        prompt: prompt.trim(),
+        prompt: trimmedPrompt,
         base64: '',
         status: 'generating',
         createdAt: Date.now()
@@ -531,7 +640,7 @@ const App: React.FC = () => {
       setIsGenerating(true);
 
       try {
-        const imageBytes = await generateImages(prompt.trim());
+        const imageBytes = await generateImages(trimmedPrompt);
         const base64 = `data:image/jpeg;base64,${imageBytes[0]}`;
         
         setImages(prev => prev.map(img => 
@@ -541,6 +650,9 @@ const App: React.FC = () => {
         ));
       } catch (error) {
         console.error('Error generating image:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to generate image';
+        setError(errorMessage);
+        
         setImages(prev => prev.map(img => 
           img.id === newImage.id 
             ? { ...img, status: 'error' as const }
@@ -549,11 +661,26 @@ const App: React.FC = () => {
       } finally {
         setIsGenerating(false);
       }
-    }, [prompt, isGenerating, setImages]);
+    }, [prompt, isGenerating, setImages, settings.geminiApiKey]);
 
     const deleteImage = useCallback((id: string) => {
       setImages(prev => prev.filter(img => img.id !== id));
     }, [setImages]);
+
+    const downloadImage = useCallback((image: ImageObject) => {
+      if (!image.base64) return;
+      
+      try {
+        const link = document.createElement('a');
+        link.href = image.base64;
+        link.download = `generated-image-${image.id}.jpg`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } catch (error) {
+        console.error('Error downloading image:', error);
+      }
+    }, []);
 
     return (
       <div className="p-8">
@@ -561,6 +688,32 @@ const App: React.FC = () => {
           <h1 className="text-3xl font-bold mb-2">Image Generation</h1>
           <p className="text-gray-600 dark:text-gray-400">Create stunning images with AI</p>
         </div>
+
+        {!settings.geminiApiKey && (
+          <Card className="p-6 mb-6 border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
+            <div className="flex items-center gap-3">
+              <HelpCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
+              <div>
+                <h3 className="font-semibold text-yellow-800 dark:text-yellow-200">API Key Required</h3>
+                <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                  Configure your Gemini API key in Settings to generate images.
+                </p>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {error && (
+          <Card className="p-4 mb-6 border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20">
+            <div className="flex items-center gap-2">
+              <X className="w-4 h-4 text-red-500" />
+              <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+              <Button variant="ghost" size="icon" onClick={() => setError(null)} className="ml-auto">
+                <X className="w-3 h-3" />
+              </Button>
+            </div>
+          </Card>
+        )}
 
         <Card className="p-6 mb-8">
           <div className="space-y-4">
@@ -571,11 +724,12 @@ const App: React.FC = () => {
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="Describe the image you want to generate..."
                 rows={3}
+                disabled={!settings.geminiApiKey}
               />
             </div>
             <Button 
               onClick={generateImage} 
-              disabled={!prompt.trim() || isGenerating}
+              disabled={!prompt.trim() || isGenerating || !settings.geminiApiKey}
               className="w-full"
             >
               {isGenerating ? (
@@ -629,12 +783,7 @@ const App: React.FC = () => {
                     )}
                     <Button variant="ghost" size="icon" onClick={() => deleteImage(image.id)}>
                       <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </Card>
-          ))}
+                        onClick={() => downloadImage(image)}
         </div>
 
         {images.length === 0 && (
