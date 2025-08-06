@@ -20,11 +20,12 @@ if (openaiApiKey) {
 }
 
 export const streamChat = async (conversation: Conversation) => {
-    const { systemPrompt, temperature, topP, messages, model } = conversation;
-
     if (model.startsWith('gpt-')) {
         return streamOpenAIChat(conversation);
     } else {
+        if (!geminiAI) {
+            throw new Error("Gemini API key is not configured. Please use an OpenAI model instead or configure your Gemini API key.");
+        }
         return streamGeminiChat(conversation);
     }
 };
@@ -127,7 +128,10 @@ export const generateImages = async (prompt: string) => {
 
 export const getTitleForChat = async (firstMessage: string, model: string = 'gemini-2.5-flash') => {
     try {
-        if (model.startsWith('gpt-') && openaiClient) {
+        if (model.startsWith('gpt-')) {
+            if (!openaiClient) {
+                throw new Error("OpenAI API key is not configured.");
+            }
             const response = await openaiClient.chat.completions.create({
                 model: 'gpt-3.5-turbo',
                 messages: [
@@ -140,7 +144,25 @@ export const getTitleForChat = async (firstMessage: string, model: string = 'gem
                 max_tokens: 20
             });
             return response.choices[0]?.message?.content?.replace(/"/g, '').trim() || "New Chat";
-        } else if (geminiAI) {
+        } else {
+            if (!geminiAI) {
+                // Fallback to OpenAI if Gemini is not available
+                if (openaiClient) {
+                    const response = await openaiClient.chat.completions.create({
+                        model: 'gpt-3.5-turbo',
+                        messages: [
+                            {
+                                role: 'user',
+                                content: `Summarize the following user query into a short, 3-5 word title for a chat log. Do not use quotes. Query: "${firstMessage}"`
+                            }
+                        ],
+                        temperature: 0.1,
+                        max_tokens: 20
+                    });
+                    return response.choices[0]?.message?.content?.replace(/"/g, '').trim() || "New Chat";
+                }
+                return "New Chat";
+            }
             const response = await geminiAI.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: `Summarize the following user query into a short, 3-5 word title for a chat log. Do not use quotes. Query: "${firstMessage}"`,
@@ -150,7 +172,6 @@ export const getTitleForChat = async (firstMessage: string, model: string = 'gem
             });
             return response.text.replace(/"/g, '').trim();
         }
-        return "New Chat";
     } catch (error) {
         console.error("Error generating title:", error);
         return "New Chat";
